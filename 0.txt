@@ -1,0 +1,345 @@
+--[[ ============================================
+     tk010 - Winter Edition (Perfect POV Split)
+============================================ ]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- [[ ⚙️ 核心變數 ]] --
+local FlyEnabled = false
+local FlySpeed = 100
+local SpeedEnabled = false
+local WalkSpeed = 50
+local AimEnabled = false
+local HeadBackEnabled = false
+local fakeChar = nil
+
+-- [[ 🛠️ 獲取最近敵人 ]] --
+local function GetBestEnemy()
+    local bestEnemy, minDist = nil, math.huge
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local dist = (hrp.Position - myRoot.Position).Magnitude
+                if dist < minDist then minDist = dist; bestEnemy = plr end
+            end
+        end
+    end
+    return bestEnemy
+end
+
+-- [[ 核心功能邏輯 ]] --
+local flyBodyVelocity = nil
+local flyBodyGyro = nil
+
+RunService.RenderStepped:Connect(function(dt)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+
+    -- 1. 完美飛行 (WASD)
+    if FlyEnabled then
+        if not flyBodyVelocity then
+            flyBodyVelocity = Instance.new("BodyVelocity", hrp)
+            flyBodyGyro = Instance.new("BodyGyro", hrp)
+            flyBodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+            flyBodyGyro.P = 10000
+        end
+        
+        local cam = workspace.CurrentCamera
+        local moveDir = Vector3.zero
+        local camLook = cam.CFrame.LookVector
+        local camRight = cam.CFrame.RightVector
+        
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camLook end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camLook end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camRight end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camRight end
+        
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir = moveDir - Vector3.new(0, 1, 0) end
+        
+        flyBodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        flyBodyVelocity.Velocity = moveDir.Magnitude > 0 and (moveDir.Unit * FlySpeed) or Vector3.zero
+        flyBodyGyro.CFrame = cam.CFrame
+    else
+        if flyBodyVelocity then flyBodyVelocity:Destroy(); flyBodyVelocity = nil end
+        if flyBodyGyro then flyBodyGyro:Destroy(); flyBodyGyro = nil end
+    end
+
+    -- 2. 跑步速度
+    if SpeedEnabled and not FlyEnabled then
+        hum.WalkSpeed = WalkSpeed
+    elseif not FlyEnabled and hum.WalkSpeed ~= 16 then
+        hum.WalkSpeed = 16
+    end
+
+    -- 3. 頭部後仰 (利用假模型，完全不影响真实视角)
+    if HeadBackEnabled then
+        if not fakeChar or not fakeChar.Parent then
+            -- 隱藏真身
+            for _, v in pairs(char:GetChildren()) do
+                if v:IsA("BasePart") then v.Transparency = 1 end
+            end
+            -- 建立假人
+            fakeChar = char:Clone()
+            fakeChar.Name = "FakeChar"
+            for _, v in pairs(fakeChar:GetChildren()) do
+                if v:IsA("BasePart") then
+                    v.Transparency = 0
+                    v.CanCollide = false
+                    v.Anchored = false
+                    -- 讓假人無法被其他腳本控制
+                    if v:FindFirstChildOfClass("Motor6D") then
+                        v:FindFirstChildOfClass("Motor6D"):Destroy()
+                    end
+                end
+            end
+            -- 折斷假人的頭
+            local neck = fakeChar:FindFirstChild("Head") and fakeChar.Head:FindFirstChild("Neck")
+            if neck then
+                neck.C0 = CFrame.new(0, 1, 0) * CFrame.Angles(math.rad(180), 0, 0)
+                neck.C1 = CFrame.new(0, -0.5, 0)
+            end
+            fakeChar.Parent = workspace
+            
+            -- 焊接假人到真身
+            local fakeHrp = fakeChar:FindFirstChild("HumanoidRootPart")
+            if fakeHrp then
+                local weld = Instance.new("WeldConstraint")
+                weld.Part0 = hrp
+                weld.Part1 = fakeHrp
+                weld.Parent = hrp
+            end
+        end
+        -- 每一幀同步位置
+        local fakeHrp = fakeChar and fakeChar:FindFirstChild("HumanoidRootPart")
+        if fakeHrp and hrp then
+            fakeHrp.CFrame = hrp.CFrame
+        end
+    else
+        -- 恢復真身
+        if char then
+            for _, v in pairs(char:GetChildren()) do
+                if v:IsA("BasePart") then v.Transparency = 0 end
+            end
+        end
+        -- 刪除假人
+        if fakeChar then
+            fakeChar:Destroy()
+            fakeChar = nil
+        end
+    end
+
+    -- 4. 自瞄 POV
+    if AimEnabled then
+        local enemy = GetBestEnemy()
+        if enemy and enemy.Character then
+            local head = enemy.Character:FindFirstChild("Head")
+            if head then
+                workspace.CurrentCamera.CFrame = CFrame.new(workspace.CurrentCamera.CFrame.Position, head.Position)
+            end
+        end
+    end
+end)
+
+-- 角色重生時清理假人
+LocalPlayer.CharacterAdded:Connect(function()
+    HeadBackEnabled = false
+    if fakeChar then
+        fakeChar:Destroy()
+        fakeChar = nil
+    end
+end)
+
+-----------------------------------------------------------
+-- [[ ❄️ UI 與 面板內下雪特效 ]] --
+-----------------------------------------------------------
+if CoreGui:FindFirstChild("tk010_UI") then CoreGui["tk010_UI"]:Destroy() end
+
+local sg = Instance.new("ScreenGui")
+sg.Name = "tk010_UI"
+sg.Parent = CoreGui
+sg.ResetOnSpawn = false
+sg.IgnoreGuiInset = true
+
+-- 懸浮開關按鈕
+local ToggleBtn = Instance.new("TextButton", sg)
+ToggleBtn.Size = UDim2.new(0, 45, 0, 45)
+ToggleBtn.Position = UDim2.new(0, 20, 0, 20)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+ToggleBtn.Text = "tk"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.TextSize = 16
+ToggleBtn.AutoButtonColor = false
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
+local btnStroke = Instance.new("UIStroke", ToggleBtn)
+btnStroke.Color = Color3.fromRGB(255, 255, 255)
+btnStroke.Thickness = 2
+btnStroke.Transparency = 0.5
+
+-- 主面板
+local Main = Instance.new("Frame", sg)
+Main.Size = UDim2.new(0, 380, 0, 320)
+Main.Position = UDim2.new(0.5, -190, 0.5, -160)
+Main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+Main.BackgroundTransparency = 0.1
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.Draggable = true
+Main.ClipsDescendants = true
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 8)
+
+local stroke = Instance.new("UIStroke", Main)
+stroke.Color = Color3.fromRGB(255, 255, 255)
+stroke.Thickness = 1.5
+stroke.Transparency = 0.3
+
+-- 開關邏輯
+local isPanelOpen = true
+ToggleBtn.MouseButton1Click:Connect(function()
+    isPanelOpen = not isPanelOpen
+    if isPanelOpen then
+        Main.Visible = true
+        Main.Size = UDim2.new(0, 0, 0, 0)
+        TweenService:Create(Main, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(0, 380, 0, 320)}):Play()
+        TweenService:Create(btnStroke, TweenInfo.new(0.2), {Transparency = 0.5}):Play()
+    else
+        local tween = TweenService:Create(Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(0, 0, 0, 0)})
+        tween:Play()
+        TweenService:Create(btnStroke, TweenInfo.new(0.2), {Transparency = 0}):Play()
+        tween.Completed:Connect(function() Main.Visible = false end)
+    end
+end)
+
+ToggleBtn.MouseEnter:Connect(function() TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 50, 70)}):Play() end)
+ToggleBtn.MouseLeave:Connect(function() TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(25, 25, 35)}):Play() end)
+
+-- 雪花容器
+local SnowContainer = Instance.new("Frame", Main)
+SnowContainer.Size = UDim2.new(1, 0, 1, 0)
+SnowContainer.BackgroundTransparency = 1
+SnowContainer.ZIndex = 0
+
+-- 標題
+local Title = Instance.new("TextLabel", Main)
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundTransparency = 1
+Title.Text = "tk010 | WINTER"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+Title.ZIndex = 2
+
+-- 面板內的關閉按鈕
+local CloseBtn = Instance.new("TextButton", Main)
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 20
+CloseBtn.ZIndex = 2
+CloseBtn.MouseButton1Click:Connect(function() 
+    isPanelOpen = false
+    Main.Visible = false
+    btnStroke.Transparency = 0
+end)
+
+-- UI 生成器
+local function CreateFeatureRow(name, yPos, toggleFunc, sliderMin, sliderMax, defaultVal, sliderFunc)
+    local Frame = Instance.new("Frame", Main)
+    Frame.Size = UDim2.new(1, -40, 0, 60)
+    Frame.Position = UDim2.new(0, 20, 0, yPos)
+    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    Frame.BackgroundTransparency = 0.2
+    Frame.BorderSizePixel = 0
+    Frame.ZIndex = 2
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+
+    local FeatureToggle = Instance.new("TextButton", Frame)
+    FeatureToggle.Size = UDim2.new(0, 120, 0, 25)
+    FeatureToggle.Position = UDim2.new(0, 10, 0, 5)
+    FeatureToggle.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    FeatureToggle.Text = name .. " : OFF"
+    FeatureToggle.TextColor3 = Color3.fromRGB(200, 200, 200)
+    FeatureToggle.Font = Enum.Font.GothamMedium
+    FeatureToggle.TextSize = 12
+    FeatureToggle.ZIndex = 2
+    Instance.new("UICorner", FeatureToggle).CornerRadius = UDim.new(0, 4)
+
+    local isToggled = false
+    FeatureToggle.MouseButton1Click:Connect(function()
+        isToggled = not isToggled
+        FeatureToggle.Text = name .. (isToggled and " : ON" or " : OFF")
+        FeatureToggle.BackgroundColor3 = isToggled and Color3.fromRGB(50, 150, 250) or Color3.fromRGB(40, 40, 50)
+        toggleFunc(isToggled)
+    end)
+
+    if sliderMin and sliderMax then
+        local TextBox = Instance.new("TextBox", Frame)
+        TextBox.Size = UDim2.new(0, 60, 0, 25)
+        TextBox.Position = UDim2.new(1, -70, 0, 5)
+        TextBox.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+        TextBox.Text = tostring(defaultVal)
+        TextBox.TextColor3 = Color3.fromRGB(100, 200, 255)
+        TextBox.Font = Enum.Font.GothamBold
+        TextBox.TextSize = 12
+        TextBox.ZIndex = 2
+        Instance.new("UICorner", TextBox).CornerRadius = UDim.new(0, 4)
+
+        TextBox.FocusLost:Connect(function()
+            local num = tonumber(TextBox.Text)
+            if num then
+                num = math.clamp(num, sliderMin, sliderMax)
+                TextBox.Text = tostring(num)
+                sliderFunc(num)
+            else
+                TextBox.Text = tostring(defaultVal)
+            end
+        end)
+    end
+end
+
+CreateFeatureRow("Fly (WASD)", 50, function(s) FlyEnabled = s end, 100, 500, FlySpeed, function(v) FlySpeed = v end)
+CreateFeatureRow("WalkSpeed", 120, function(s) SpeedEnabled = s end, 0, 500, WalkSpeed, function(v) WalkSpeed = v end)
+CreateFeatureRow("POV Aim (Head)", 190, function(s) AimEnabled = s end)
+CreateFeatureRow("Head Back (Glitch)", 260, function(s) HeadBackEnabled = s end)
+
+-- ❄️ 下雪特效
+task.spawn(function()
+    while sg.Parent do
+        task.wait(0.05)
+        local snow = Instance.new("Frame", SnowContainer)
+        snow.Size = UDim2.new(0, math.random(2, 5), 0, math.random(2, 5))
+        snow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        snow.BackgroundTransparency = math.random(30, 80) / 100
+        snow.BorderSizePixel = 0
+        snow.Position = UDim2.new(math.random(), 0, -0.05, 0)
+        
+        local corner = Instance.new("UICorner", snow)
+        corner.CornerRadius = UDim.new(1, 0)
+
+        local fallTime = math.random(3, 8)
+        local sway = math.random(-20, 20)
+        
+        TweenService:Create(snow, TweenInfo.new(fallTime, Enum.EasingStyle.Linear), {
+            Position = UDim2.new(snow.Position.X.Scale + (sway / 1000), 0, 1.05, 0)
+        }):Play()
+
+        game:GetService("Debris"):AddItem(snow, fallTime)
+    end
+end)
+
+print("[tk010] Perfect POV Split Loaded!")
